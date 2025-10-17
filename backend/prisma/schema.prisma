@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                    Int @id @default(autoincrement())
+  username              String @unique
+  password              String
+  role                  String @default("Player") // "Player" or "Dungeon Master"
+  createdAt             DateTime @default(now())
+  
+  // New instance relations
+  createdInstances      Instance[] @relation("InstanceDM")
+  instanceInvitations   InstanceInvitation[] @relation("InstanceInvitations")
+  instanceSessions      InstanceSession[] @relation("InstanceSessions")
+  instanceCharacters    InstanceCharacter[] @relation("InstanceCharacters")
+}
+
+model Instance {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  status      String   @default("active") // active, paused, completed, cancelled
+  dmId        Int
+  dm          User     @relation("InstanceDM", fields: [dmId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  invitations InstanceInvitation[]
+  sessions    InstanceSession[]
+  instanceCharacters InstanceCharacter[]
+}
+
+model InstanceInvitation {
+  id         Int      @id @default(autoincrement())
+  instanceId Int
+  playerId   Int
+  status     String   @default("pending") // pending, accepted, declined, expired
+  invitedAt  DateTime @default(now())
+  respondedAt DateTime?
+  
+  // Relations
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  player     User     @relation("InstanceInvitations", fields: [playerId], references: [id])
+  
+  @@unique([instanceId, playerId])
+}
+
+model InstanceSession {
+  id         Int      @id @default(autoincrement())
+  instanceId Int
+  userId     Int
+  joinedAt   DateTime @default(now())
+  lastSeen   DateTime @default(now())
+  
+  // Relations
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  user       User     @relation("InstanceSessions", fields: [userId], references: [id])
+  
+  @@unique([instanceId, userId])
+}
+
+model InstanceCharacter {
+  id           Int      @id @default(autoincrement())
+  instanceId   Int
+  userId       Int
+  characterName String
+  maxHP        Int
+  currentHP    Int
+  initiative   Int
+  conditions   String?  // JSON string storing array of condition filenames
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  instance     Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  user        User     @relation("InstanceCharacters", fields: [userId], references: [id])
+  
+  @@unique([instanceId, userId])
+}
+

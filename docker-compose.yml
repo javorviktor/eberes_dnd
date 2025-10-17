@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    container_name: dnd_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dnd
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: dnd_backend
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/dnd?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev_secret}
+      PORT: 4000
+    ports:
+      - "4000:4000"
+    command: ["pnpm", "start:migrate"]
+    develop:
+      watch:
+        - path: ./backend
+          action: sync
+          target: /app
+        - path: ./backend/package.json
+          action: rebuild
+
+  frontend:
+    build: ./frontend
+    container_name: dnd_frontend
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - "3000:3000"
+    develop:
+      watch:
+        - path: ./frontend
+          action: sync
+          target: /app
+        - path: ./frontend/package.json
+          action: rebuild
+
+volumes:
+  db_data:
+

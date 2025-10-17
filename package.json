@@ -1,0 +1,20 @@
+{
+  "name": "dnd-character-builder",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.0.0",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "pnpm -C backend dev & pnpm -C frontend dev",
+    "build": "pnpm -C backend build && pnpm -C frontend build",
+    "start": "pnpm -C backend start & pnpm -C frontend start",
+    "format": "prettier -w ."
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}
+
