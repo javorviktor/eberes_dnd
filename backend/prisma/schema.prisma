@@ -35,6 +35,7 @@ model Instance {
   invitations InstanceInvitation[]
   sessions    InstanceSession[]
   instanceCharacters InstanceCharacter[]
+  combatLogs CombatLog[]
 }
 
 model InstanceInvitation {
@@ -73,8 +74,12 @@ model InstanceCharacter {
   characterName String
   maxHP        Int
   currentHP    Int
+  tempHP       Int      @default(0)  // Temporary hit points
   initiative   Int
   conditions   String?  // JSON string storing array of condition filenames
+  lastChangeType String? // 'damage', 'healing', 'tempHP'
+  lastChangeAmount Int?  // Amount of last change
+  lastChangeTimestamp DateTime? // When last change occurred
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   
@@ -83,5 +88,19 @@ model InstanceCharacter {
   user        User     @relation("InstanceCharacters", fields: [userId], references: [id])
   
   @@unique([instanceId, userId])
+}
+
+model CombatLog {
+  id           Int      @id @default(autoincrement())
+  instanceId   Int
+  characterName String
+  action       String   // "Healed", "Suffered", "Received", "Lost", etc.
+  details      String   // "10 HP", "Stunned Condition", etc.
+  createdAt    DateTime @default(now())
+  
+  // Relations
+  instance     Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  
+  @@index([instanceId, createdAt])
 }
 

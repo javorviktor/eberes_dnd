@@ -401,6 +401,7 @@ router.post('/:id/select-character', async (req: AuthRequest, res: Response) => 
       characterName: z.string().min(1),
       maxHP: z.number().int().min(1),
       currentHP: z.number().int().min(0),
+      tempHP: z.number().int().min(0).optional().default(0),
       initiative: z.number().int().min(0),
     });
 
@@ -409,7 +410,7 @@ router.post('/:id/select-character', async (req: AuthRequest, res: Response) => 
       return res.status(400).json({ error: parse.error.flatten() });
     }
 
-    const { characterName, maxHP, currentHP, initiative } = parse.data;
+    const { characterName, maxHP, currentHP, tempHP, initiative } = parse.data;
 
     // Verify user has access to this instance
     const hasAccess = await prisma.instance.findFirst({
@@ -440,6 +441,7 @@ router.post('/:id/select-character', async (req: AuthRequest, res: Response) => 
         characterName,
         maxHP,
         currentHP,
+        tempHP,
         initiative,
         updatedAt: new Date(),
       },
@@ -449,6 +451,7 @@ router.post('/:id/select-character', async (req: AuthRequest, res: Response) => 
         characterName,
         maxHP,
         currentHP,
+        tempHP,
         initiative,
       },
     });
@@ -569,7 +572,7 @@ router.patch('/:id/update-hp', async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
     const instanceId = Number(req.params.id);
-    const { characterId, newHP } = req.body;
+    const { characterId, newHP, newTempHP, lastChangeType, lastChangeAmount } = req.body;
 
     if (!characterId || newHP === undefined) {
       return res.status(400).json({ error: 'Character ID and new HP are required' });
@@ -588,10 +591,20 @@ router.patch('/:id/update-hp', async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Access denied to this character' });
     }
 
-    // Update the character's HP
+    // Update the character's HP, temp HP, and last change data
+    const updateData: any = { currentHP: newHP };
+    if (newTempHP !== undefined) {
+      updateData.tempHP = newTempHP;
+    }
+    if (lastChangeType && lastChangeAmount !== undefined) {
+      updateData.lastChangeType = lastChangeType;
+      updateData.lastChangeAmount = lastChangeAmount;
+      updateData.lastChangeTimestamp = new Date();
+    }
+
     const updatedCharacter = await prisma.instanceCharacter.update({
       where: { id: characterId },
-      data: { currentHP: newHP },
+      data: updateData,
     });
 
     res.json({ message: 'HP updated successfully', character: updatedCharacter });
@@ -637,6 +650,92 @@ router.patch('/:id/update-conditions', async (req: AuthRequest, res: Response) =
   } catch (error) {
     console.error('Error updating conditions:', error);
     res.status(500).json({ error: 'Failed to update conditions' });
+  }
+});
+
+// Add combat log entry
+router.post('/:id/combat-log', async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const instanceId = Number(req.params.id);
+    const { characterName, action, details } = req.body;
+
+    if (!characterName || !action || !details) {
+      return res.status(400).json({ error: 'Character name, action, and details are required' });
+    }
+
+    // Check if user has access to this instance
+    const hasAccess = await prisma.instance.findFirst({
+      where: {
+        id: instanceId,
+        OR: [
+          { dmId: userId },
+          {
+            invitations: {
+              some: {
+                playerId: userId,
+                status: 'accepted',
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied to this instance' });
+    }
+
+    // Create combat log entry
+    const combatLogEntry = await prisma.combatLog.create({
+      data: {
+        instanceId,
+        characterName,
+        action,
+        details,
+      },
+    });
+
+    res.json(combatLogEntry);
+  } catch (error) {
+    console.error('Error adding combat log entry:', error);
+    res.status(500).json({ error: 'Failed to add combat log entry' });
+  }
+});
+
+// Get combat log entries for an instance (DM only)
+router.get('/:id/combat-log', async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const userRole = req.userRole!;
+    const instanceId = Number(req.params.id);
+
+    if (userRole !== 'Dungeon Master') {
+      return res.status(403).json({ error: 'Only Dungeon Masters can view combat logs' });
+    }
+
+    // Check if user is the DM of this instance
+    const instance = await prisma.instance.findFirst({
+      where: {
+        id: instanceId,
+        dmId: userId,
+      },
+    });
+
+    if (!instance) {
+      return res.status(404).json({ error: 'Instance not found or access denied' });
+    }
+
+    // Get combat log entries
+    const combatLogs = await prisma.combatLog.findMany({
+      where: { instanceId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(combatLogs);
+  } catch (error) {
+    console.error('Error fetching combat log:', error);
+    res.status(500).json({ error: 'Failed to fetch combat log' });
   }
 });
 

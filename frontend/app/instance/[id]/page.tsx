@@ -10,7 +10,11 @@ interface InstanceCharacter {
   characterName: string;
   maxHP: number;
   currentHP: number;
+  tempHP: number;
   initiative: number;
+  lastChangeType?: string;
+  lastChangeAmount?: number;
+  lastChangeTimestamp?: string;
   user: {
     id: number;
     username: string;
@@ -41,15 +45,46 @@ export default function InstanceLobbyPage() {
   const [isHPModalOpen, setIsHPModalOpen] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState<InstanceCharacter | null>(null);
   const [selectedHP, setSelectedHP] = useState<number>(0);
+  const [sufferAmount, setSufferAmount] = useState<string>('');
+  const [healAmount, setHealAmount] = useState<string>('');
+  const [tempHP, setTempHP] = useState<string>('');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isConditionsModalOpen, setIsConditionsModalOpen] = useState(false);
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
   const [characterConditions, setCharacterConditions] = useState<{[characterId: number]: string[]}>({});
+  const [isConditionViewModalOpen, setIsConditionViewModalOpen] = useState(false);
+  const [viewedCondition, setViewedCondition] = useState<string | null>(null);
+  const [isCombatLogModalOpen, setIsCombatLogModalOpen] = useState(false);
+  const [combatLog, setCombatLog] = useState<Array<{
+    id: number;
+    createdAt: string;
+    characterName: string;
+    action: string;
+    details: string;
+  }>>([]);
 
   useEffect(() => {
     console.log('Instance page loaded, current user:', currentUser);
     console.log('Instance ID from params:', instanceId);
   }, [currentUser, instanceId]);
+
+  useEffect(() => {
+    console.log('Current user role:', currentUser?.role);
+  }, [currentUser]);
+
+  // Auto-refresh combat log when modal is open
+  useEffect(() => {
+    if (!isCombatLogModalOpen) return;
+
+    // Load combat log when modal opens
+    fetchCombatLog();
+
+    const interval = setInterval(() => {
+      fetchCombatLog();
+    }, 2000); // Refresh every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [isCombatLogModalOpen]);
 
   useEffect(() => {
     if (!instanceId) return;
@@ -165,6 +200,9 @@ export default function InstanceLobbyPage() {
     if (currentUser && character.user.id === currentUser.id) {
       setSelectedCharacter(character);
       setSelectedHP(character.currentHP);
+      setSufferAmount('');
+      setHealAmount('');
+      setTempHP('');
       setIsHPModalOpen(true);
     }
   };
@@ -173,6 +211,9 @@ export default function InstanceLobbyPage() {
     setIsHPModalOpen(false);
     setSelectedCharacter(null);
     setSelectedHP(0);
+    setSufferAmount('');
+    setHealAmount('');
+    setTempHP('');
   };
 
   const updateHP = async () => {
@@ -182,6 +223,76 @@ export default function InstanceLobbyPage() {
       const token = sessionStorage.getItem('authToken');
       if (!token) return;
 
+      // Parse input values, defaulting to 0 if empty or invalid
+      const sufferValue = sufferAmount === '' ? 0 : parseInt(sufferAmount) || 0;
+      const healValue = healAmount === '' ? 0 : parseInt(healAmount) || 0;
+      const tempValue = tempHP === '' ? 0 : parseInt(tempHP) || 0;
+      
+      // Calculate new HP based on inputs
+      let newHP = selectedCharacter.currentHP;
+      let newTempHP = selectedCharacter.tempHP || 0;
+      
+      // Apply damage (suffer) - first reduce temp HP, then real HP
+      if (sufferValue > 0) {
+        let remainingDamage = sufferValue;
+        
+        // First reduce temp HP
+        if (newTempHP > 0) {
+          const tempHPReduction = Math.min(newTempHP, remainingDamage);
+          newTempHP -= tempHPReduction;
+          remainingDamage -= tempHPReduction;
+        }
+        
+        // Then reduce real HP
+        if (remainingDamage > 0) {
+          newHP = Math.max(0, newHP - remainingDamage);
+        }
+      }
+      
+      // Apply healing - can't exceed max HP
+      if (healValue > 0) {
+        newHP = Math.min(selectedCharacter.maxHP, newHP + healValue);
+      }
+      
+      // Apply temp HP - can exceed max HP
+      if (tempValue > 0) {
+        newTempHP = tempValue; // Temp HP replaces existing temp HP
+      }
+
+      // Calculate last change data
+      const changes = [];
+      
+      if (sufferValue > 0) {
+        changes.push({ type: 'damage', amount: sufferValue });
+      }
+      if (healValue > 0) {
+        changes.push({ type: 'healing', amount: healValue });
+      }
+      if (tempValue > 0) {
+        changes.push({ type: 'tempHP', amount: tempValue });
+      }
+      
+      // Determine the primary change type and amount
+      let primaryType: 'damage' | 'healing' | 'tempHP' = 'damage';
+      let totalAmount: number = 0;
+      
+      if (changes.length > 0) {
+        const totalDamage = changes.filter(c => c.type === 'damage').reduce((sum, c) => sum + c.amount, 0);
+        const totalHealing = changes.filter(c => c.type === 'healing').reduce((sum, c) => sum + c.amount, 0);
+        const totalTempHP = changes.filter(c => c.type === 'tempHP').reduce((sum, c) => sum + c.amount, 0);
+        
+        if (totalDamage > 0) {
+          primaryType = 'damage';
+          totalAmount = totalDamage;
+        } else if (totalHealing > 0) {
+          primaryType = 'healing';
+          totalAmount = totalHealing;
+        } else {
+          primaryType = 'tempHP';
+          totalAmount = totalTempHP;
+        }
+      }
+
       const response = await fetch(`${API_URL}/instances/${instanceId}/update-hp`, {
         method: 'PATCH',
         headers: {
@@ -190,7 +301,10 @@ export default function InstanceLobbyPage() {
         },
         body: JSON.stringify({
           characterId: selectedCharacter.id,
-          newHP: selectedHP
+          newHP: newHP,
+          newTempHP: newTempHP,
+          lastChangeType: primaryType,
+          lastChangeAmount: totalAmount
         }),
       });
 
@@ -199,10 +313,26 @@ export default function InstanceLobbyPage() {
         if (instance) {
           const updatedCharacters = instance.instanceCharacters.map(char => 
             char.id === selectedCharacter.id 
-              ? { ...char, currentHP: selectedHP }
+              ? { ...char, currentHP: newHP, tempHP: newTempHP }
               : char
           );
           setInstance({ ...instance, instanceCharacters: updatedCharacters });
+          
+          // Add to combat log for each action
+          if (sufferValue > 0) {
+            addToCombatLog(selectedCharacter.characterName, 'Suffered', `${sufferValue} HP`);
+          }
+          if (healValue > 0) {
+            addToCombatLog(selectedCharacter.characterName, 'Healed', `${healValue} HP`);
+          }
+          if (tempValue > 0) {
+            addToCombatLog(selectedCharacter.characterName, 'Gained', `${tempValue} Temp HP`);
+          }
+          
+          console.log('Setting last change for character:', selectedCharacter.id, {
+            type: primaryType,
+            amount: totalAmount
+          });
         }
         closeHPModal();
       } else {
@@ -268,6 +398,28 @@ export default function InstanceLobbyPage() {
             ...prev,
             [userCharacter.id]: selectedConditions
           }));
+          
+          // Add to combat log for each condition change
+          const previousConditions = characterConditions[userCharacter.id] || [];
+          const addedConditions = selectedConditions.filter(condition => !previousConditions.includes(condition));
+          const removedConditions = previousConditions.filter(condition => !selectedConditions.includes(condition));
+          
+          console.log('Condition changes detected:', { 
+            characterName: userCharacter.characterName, 
+            addedConditions, 
+            removedConditions 
+          });
+          
+          addedConditions.forEach(condition => {
+            console.log('Adding condition to log:', condition);
+            addToCombatLog(userCharacter.characterName, 'Received', `${getConditionName(condition)} Condition`);
+          });
+          
+          removedConditions.forEach(condition => {
+            console.log('Removing condition from log:', condition);
+            addToCombatLog(userCharacter.characterName, 'Lost', `${getConditionName(condition)} Condition`);
+          });
+          
           closeConditionsModal();
         } else {
           console.error('Failed to update conditions');
@@ -278,10 +430,109 @@ export default function InstanceLobbyPage() {
     }
   };
 
+  const openConditionViewModal = (condition: string) => {
+    setViewedCondition(condition);
+    setIsConditionViewModalOpen(true);
+  };
+
+  const closeConditionViewModal = () => {
+    setIsConditionViewModalOpen(false);
+    setViewedCondition(null);
+  };
+
+  const openCombatLogModal = () => {
+    setIsCombatLogModalOpen(true);
+  };
+
+  const closeCombatLogModal = () => {
+    setIsCombatLogModalOpen(false);
+  };
+
+  const addToCombatLog = async (characterName: string, action: string, details: string) => {
+    try {
+      const token = sessionStorage.getItem('authToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_URL}/instances/${instanceId}/combat-log`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          characterName,
+          action,
+          details
+        }),
+      });
+
+      if (response.ok) {
+        const newEntry = await response.json();
+        console.log('Added to combat log:', newEntry);
+        // Refresh combat log if modal is open
+        if (isCombatLogModalOpen) {
+          fetchCombatLog();
+        }
+      } else {
+        console.error('Failed to add combat log entry');
+      }
+    } catch (error) {
+      console.error('Error adding to combat log:', error);
+    }
+  };
+
+  const fetchCombatLog = async () => {
+    try {
+      const token = sessionStorage.getItem('authToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_URL}/instances/${instanceId}/combat-log`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const logs = await response.json();
+        setCombatLog(logs);
+      } else {
+        console.error('Failed to fetch combat log');
+      }
+    } catch (error) {
+      console.error('Error fetching combat log:', error);
+    }
+  };
+
   const getConditionName = (filename: string) => {
     return filename.replace('.png', '').replace(/([A-Z])/g, ' $1').trim().split(' ').map(word => 
       word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
     ).join(' ');
+  };
+
+  const getHealthStatus = (currentHP: number, maxHP: number) => {
+    const hpPercentage = (currentHP / maxHP) * 100;
+    if (hpPercentage === 100) return 'Full Health';
+    if (hpPercentage >= 75) return 'Healthy';
+    if (hpPercentage >= 50) return 'Slightly Injured';
+    if (hpPercentage >= 25) return 'Heavily Injured';
+    if (hpPercentage >= 1) return 'In Danger';
+    return 'Unconscious';
+  };
+
+  const getConditionDescription = (condition: string) => {
+    const conditionDescriptions: {[key: string]: string} = {
+      'concentration.png': 'Automatic loss: Casting a second spell that requires concentration will end the first one automatically.\nSaving throws: If you take damage, you must make a Constitution saving throw to maintain the spell.\nThe DC is 10 or half the damage taken (whichever is higher), to a maximum DC of 30.\nOther triggers: Concentration also ends if you have the Incapacitated condition or if you die.\nDuration: Concentration spells have a "Concentration" duration, which can last up to an hour, or until you end it early.\nLong casting times: Spells with a casting time of more than one action require concentration for the entire casting process, even if they aren\'t normally concentration spells. If you lose concentration, you must start the casting process over.',
+      'stunned.png': 'While you have the Stunned condition, you experience the following effects.\nIncapacitated. You have the Incapacitated condition.\nSaving Throws Affected. You automatically fail Strength and Dexterity saving throws.\nAttacks Affected. Attack rolls against you have Advantage.',
+      'invisible.png': 'While you have the Invisible condition, you experience the following effects.\nSurprise. If you\'re Invisible when you roll Initiative, you have Advantage on the roll.\nConcealed. You aren\'t affected by any effect that requires its target to be seen unless the effect\'s creator can somehow see you. Any equipment you are wearing or carrying is also concealed.\nAttacks Affected. Attack rolls against you have Disadvantage, and your attack rolls have Advantage. If a creature can somehow see you, you don\'t gain this benefit against that creature.',
+      'incapacitated.png': 'While you have the Incapacitated condition, you experience the following effects.\nInactive. You can\'t take any action, Bonus Action, or Reaction.\nNo Concentration. Your Concentration is broken.\nSpeechless. You can\'t speak.\nSurprised. If you\'re Incapacitated when you roll Initiative, you have Disadvantage on the roll.',
+      'paralyzed.png': 'While you have the Paralyzed condition, you experience the following effects.\nIncapacitated. You have the Incapacitated condition.\nSpeed 0. Your Speed is 0 and can\'t increase.\nSaving Throws Affected. You automatically fail Strength and Dexterity saving throws.\nAttacks Affected. Attack rolls against you have Advantage.\nAutomatic Critical Hits. Any attack roll that hits you is a Critical Hit if the attacker is within 5 feet of you.',
+      'poisioned.png': 'While you have the Poisoned condition, you experience the following effect.\nAbility Checks and Attacks Affected. You have Disadvantage on attack rolls and ability checks.',
+      'prone.png': 'While you have the Prone condition, you experience the following effects.\nRestricted Movement. Your only movement options are to crawl or to spend an amount of movement equal to half your Speed (round down) to right yourself and thereby end the condition. If your Speed is 0, you can\'t right yourself.\nAttacks Affected. You have Disadvantage on attack rolls. An attack roll against you has Advantage if the attacker is within 5 feet of you. Otherwise, that attack roll has Disadvantage.',
+      'restrained.png': 'While you have the Restrained condition, you experience the following effects.\nSpeed 0. Your Speed is 0 and can\'t increase.\nAttacks Affected. Attack rolls against you have Advantage, and your attack rolls have Disadvantage.\nSaving Throws Affected. You have Disadvantage on Dexterity saving throws.',
+      'exhaustion.png': 'While you have the Exhaustion condition, you experience the following effects.\nExhaustion Levels. This condition is cumulative. Each time you receive it, you gain 1 Exhaustion level. You die if your Exhaustion level is 6.\nD20 Tests Affected. When you make a D20 Test, the roll is reduced by 2 times your Exhaustion level.\nSpeed Reduced. Your Speed is reduced by a number of feet equal to 5 times your Exhaustion level.\nRemoving Exhaustion Levels. Finishing a Long Rest removes 1 of your Exhaustion levels. When your Exhaustion level reaches 0, the condition ends.'
+    };
+    return conditionDescriptions[condition] || 'Condition description not available.';
   };
 
   if (loading) {
@@ -351,29 +602,78 @@ export default function InstanceLobbyPage() {
               const hpPercentage = (character.currentHP / character.maxHP) * 100;
               const isCurrentUser = currentUser && character.user.id === currentUser.id;
               
+              console.log(`Rendering character ${character.characterName} (ID: ${character.id}), lastChange:`, character.lastChangeType, character.lastChangeAmount);
               return (
                 <div key={character.id} className="relative bg-white/10 border border-white/20 rounded-lg p-4">
-                  <div className="flex justify-between items-center mb-3">
+                  <div className="text-center mb-3">
                     <h3 className="text-lg font-semibold">
-                      {character.characterName} ({isCurrentUser ? 'me' : character.user.username})
+                      {character.characterName} ({character.initiative})
                     </h3>
-                    <span className="text-sm opacity-80">Initiative: {character.initiative}</span>
+                    {character.lastChangeType && character.lastChangeAmount && (
+                      <div className={`text-sm font-medium ${
+                        character.lastChangeType === 'damage' ? 'text-red-400' :
+                        character.lastChangeType === 'healing' ? 'text-green-400' :
+                        'text-blue-400'
+                      }`}>
+                        {character.lastChangeType === 'damage' ? '-' : '+'}
+                        {character.lastChangeAmount}
+                        {character.lastChangeType === 'tempHP' ? ' Temp HP' : ' HP'}
+                      </div>
+                    )}
                   </div>
                   
                   <div className="mb-3">
-                    <div className="flex justify-between text-sm mb-1">
-                      <span>HP</span>
-                      <span>{character.currentHP}/{character.maxHP}</span>
-                    </div>
-                    <div className="w-full bg-gray-700 rounded-full h-2">
-                      <div 
-                        className={`h-2 rounded-full transition-all duration-300 ${
-                          hpPercentage > 50 ? 'bg-green-500' : 
-                          hpPercentage > 25 ? 'bg-yellow-500' : 'bg-red-500'
-                        }`}
-                        style={{ width: `${Math.max(0, Math.min(100, hpPercentage))}%` }}
-                      ></div>
-                    </div>
+                    {/* Show HP bar for DM or for current user's own character */}
+                    {currentUser?.role === 'Dungeon Master' || isCurrentUser ? (
+                      <>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span>HP</span>
+                          <span>
+                            {character.currentHP}/{character.maxHP}
+                            {character.tempHP > 0 && (
+                              <span className="text-blue-400"> (+{character.tempHP})</span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="w-full bg-gray-700 rounded-full h-2 relative overflow-hidden">
+                          {/* Main HP bar */}
+                          <div 
+                            className={`h-2 rounded-full transition-all duration-300 ${
+                              hpPercentage > 50 ? 'bg-green-500' : 
+                              hpPercentage > 25 ? 'bg-yellow-500' : 'bg-red-500'
+                            }`}
+                            style={{ width: `${Math.max(0, Math.min(100, hpPercentage))}%` }}
+                          ></div>
+                          {/* Temp HP bar (blue gradient) */}
+                          {character.tempHP > 0 && (
+                            <div 
+                              className="h-2 bg-gradient-to-r from-blue-400 to-blue-600 transition-all duration-300"
+                              style={{ 
+                                width: `${Math.min(100, (character.tempHP / character.maxHP) * 100)}%`,
+                                position: 'absolute',
+                                top: 0,
+                                left: `${Math.max(0, Math.min(100, hpPercentage))}%`,
+                                zIndex: 1
+                              }}
+                            ></div>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      /* Show health status text for other players' characters */
+                      <div className="text-center">
+                        <div className="text-sm text-gray-300 mb-1">Health Status:</div>
+                <div className={`text-sm font-medium ${
+                  hpPercentage === 100 ? 'text-green-500' :
+                  hpPercentage >= 75 ? 'text-green-400' :
+                  hpPercentage >= 50 ? 'text-yellow-400' :
+                  hpPercentage >= 25 ? 'text-orange-400' :
+                  hpPercentage >= 1 ? 'text-red-400' : 'text-red-600'
+                }`}>
+                          {getHealthStatus(character.currentHP, character.maxHP)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   
                   {/* Conditions Display */}
@@ -384,8 +684,9 @@ export default function InstanceLobbyPage() {
                           <img 
                             src={`/images/conditions/${condition}`}
                             alt={getConditionName(condition)}
-                            className="w-6 h-6 object-contain"
-                            title={getConditionName(condition)}
+                            className="w-6 h-6 object-contain cursor-pointer hover:opacity-80 transition-opacity"
+                            title={`Click to view ${getConditionName(condition)} details`}
+                            onClick={() => openConditionViewModal(condition)}
                           />
                         </div>
                       ))}
@@ -433,80 +734,87 @@ export default function InstanceLobbyPage() {
             </div>
           )}
 
+          {/* DM-only buttons */}
+          {currentUser?.role === 'Dungeon Master' && (
+            <div className="mt-8 flex justify-center space-x-4">
+              <button 
+                onClick={openCombatLogModal}
+                className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
+              >
+                Combat Log
+              </button>
+            </div>
+          )}
+
           {/* HP Change Modal */}
           {isHPModalOpen && selectedCharacter && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-              <div className="bg-slate-800 rounded-lg p-6 max-w-md w-full mx-4">
-                <div className="text-center mb-6">
-                  <h3 className="text-xl font-bold text-white mb-2">HP Change</h3>
-                  <p className="text-slate-300">Current HP: {selectedCharacter.currentHP}</p>
-                </div>
+              <div className="bg-slate-800 rounded-lg p-6 max-w-md w-full mx-4 relative">
+                {/* Close button */}
+                <button
+                  onClick={closeHPModal}
+                  className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
                 
-                {/* Vertical Number Line */}
-                <div className="flex flex-col items-center space-y-1 mb-6 max-h-64 overflow-y-auto">
-                  {/* Numbers above current HP */}
-                  {Array.from({ length: 10 }, (_, i) => selectedCharacter.currentHP + 10 - i)
-                    .filter(hp => hp > selectedCharacter.currentHP)
-                    .map(hp => (
-                      <button
-                        key={hp}
-                        onClick={() => setSelectedHP(hp)}
-                        className={`w-12 h-8 rounded text-sm font-medium transition-colors ${
-                          selectedHP === hp 
-                            ? 'bg-blue-600 text-white' 
-                            : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
-                        }`}
-                      >
-                        {hp}
-                      </button>
-                    ))}
-                  
-                  {/* Current HP (centered) */}
-                  <div className="bg-green-600 text-white w-12 h-8 rounded text-sm font-medium flex items-center justify-center border-2 border-yellow-400">
-                    {selectedCharacter.currentHP}
+                <h3 className="text-xl font-bold text-white mb-6 pr-8">Update HP for {selectedCharacter.characterName}</h3>
+                
+                <div className="mb-4">
+                  <div className="text-sm text-gray-300 mb-4">
+                    Current HP: {selectedCharacter.currentHP}/{selectedCharacter.maxHP}
                   </div>
                   
-                  {/* Numbers below current HP */}
-                  {Array.from({ length: 10 }, (_, i) => selectedCharacter.currentHP - i - 1)
-                    .filter(hp => hp >= 0)
-                    .map(hp => (
-                      <button
-                        key={hp}
-                        onClick={() => setSelectedHP(hp)}
-                        className={`w-12 h-8 rounded text-sm font-medium transition-colors ${
-                          selectedHP === hp 
-                            ? 'bg-blue-600 text-white' 
-                            : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
-                        }`}
-                      >
-                        {hp}
-                      </button>
-                    ))}
-                  
-                  {/* Max HP marker */}
-                  <div className="text-xs text-slate-400 mt-2 border-t border-slate-600 pt-2">
-                    Max HP: {selectedCharacter.maxHP}
+                  <div className="space-y-4">
+                    {/* Suffer Damage */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Suffer</label>
+                      <input
+                        type="number"
+                        value={sufferAmount}
+                        onChange={(e) => setSufferAmount(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-700 text-white rounded border border-slate-600"
+                        placeholder="Enter damage amount"
+                        min="0"
+                      />
+                    </div>
+                    
+                    {/* Heal */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Heal</label>
+                      <input
+                        type="number"
+                        value={healAmount}
+                        onChange={(e) => setHealAmount(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-700 text-white rounded border border-slate-600"
+                        placeholder="Enter healing amount"
+                        min="0"
+                      />
+                    </div>
+                    
+                    {/* Temp HP */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Temp HP</label>
+                      <input
+                        type="number"
+                        value={tempHP}
+                        onChange={(e) => setTempHP(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-700 text-white rounded border border-slate-600"
+                        placeholder="Enter temp HP amount"
+                        min="0"
+                      />
+                    </div>
                   </div>
                 </div>
                 
-                {/* Action Button */}
-                <div className="flex justify-center space-x-4">
-                  <button
-                    onClick={closeHPModal}
-                    className="px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
-                  >
-                    Cancel
-                  </button>
+                <div className="flex justify-center">
                   <button
                     onClick={updateHP}
-                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
                   >
-                    {selectedHP > selectedCharacter.maxHP 
-                      ? `Temp HP +${selectedHP - selectedCharacter.currentHP}`
-                      : selectedHP > selectedCharacter.currentHP 
-                        ? `Heal +${selectedHP - selectedCharacter.currentHP}`
-                        : `Suffer -${selectedCharacter.currentHP - selectedHP}`
-                    }
+                    Apply
                   </button>
                 </div>
               </div>
@@ -526,7 +834,14 @@ export default function InstanceLobbyPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
                   {[
                     'concentration.png',
-                    'stunned.png'
+                    'stunned.png',
+                    'invisible.png',
+                    'incapacitated.png',
+                    'paralyzed.png',
+                    'poisioned.png',
+                    'prone.png',
+                    'restrained.png',
+                    'exhaustion.png'
                   ].map((condition) => (
                     <button
                       key={condition}
@@ -573,6 +888,32 @@ export default function InstanceLobbyPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Condition Details */}
+                {selectedConditions.length > 0 && (
+                  <div className="mb-6">
+                    <h4 className="text-white font-semibold mb-3">Condition Details:</h4>
+                    <div className="space-y-3">
+                      {selectedConditions.map((condition, index) => (
+                        <div key={index} className="bg-slate-700/50 rounded-lg p-4 border border-slate-600">
+                          <div className="flex items-start gap-3">
+                            <img 
+                              src={`/images/conditions/${condition}`}
+                              alt={getConditionName(condition)}
+                              className="w-6 h-6 object-contain flex-shrink-0 mt-1"
+                            />
+                            <div className="flex-1">
+                              <h5 className="text-white font-medium mb-2">{getConditionName(condition)}:</h5>
+                              <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">
+                                {getConditionDescription(condition)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 
                 {/* Action Buttons */}
                 <div className="flex justify-center space-x-4">
@@ -587,6 +928,88 @@ export default function InstanceLobbyPage() {
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     Apply Conditions
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Condition View Modal */}
+          {isConditionViewModalOpen && viewedCondition && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-slate-800 rounded-lg p-6 max-w-2xl w-full mx-4">
+                <div className="text-center mb-6">
+                  <h3 className="text-xl font-bold text-white mb-2">{getConditionName(viewedCondition)}</h3>
+                  <p className="text-slate-300">Condition Details</p>
+                </div>
+                
+                <div className="bg-slate-700/50 rounded-lg p-4 border border-slate-600">
+                  <div className="flex items-start gap-3">
+                    <img 
+                      src={`/images/conditions/${viewedCondition}`}
+                      alt={getConditionName(viewedCondition)}
+                      className="w-12 h-12 object-contain flex-shrink-0"
+                    />
+                    <div className="flex-1">
+                      <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">
+                        {getConditionDescription(viewedCondition)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex justify-center mt-6">
+                  <button
+                    onClick={closeConditionViewModal}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Combat Log Modal */}
+          {isCombatLogModalOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-slate-800 rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+                <div className="text-center mb-6">
+                  <h3 className="text-xl font-bold text-white mb-2">Combat Log</h3>
+                  <p className="text-slate-300">Track all player actions and changes</p>
+                </div>
+                
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {combatLog.length === 0 ? (
+                    <div className="text-center text-slate-400 py-8">
+                      No actions recorded yet
+                    </div>
+                  ) : (
+                    combatLog.map((entry) => (
+                      <div key={entry.id} className="bg-slate-700/50 rounded-lg p-3 border border-slate-600">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium text-white">{entry.characterName}</span>
+                              <span className="text-slate-300">{entry.action}</span>
+                              <span className="text-blue-300">{entry.details}</span>
+                            </div>
+                            <div className="text-xs text-slate-400">
+                              {new Date(entry.createdAt).toLocaleTimeString()}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                
+                <div className="flex justify-center mt-6">
+                  <button
+                    onClick={closeCombatLogModal}
+                    className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                  >
+                    Close
                   </button>
                 </div>
               </div>

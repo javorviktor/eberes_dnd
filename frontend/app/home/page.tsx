@@ -39,9 +39,10 @@ export default function HomePage() {
   const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(null);
   const [characterInput, setCharacterInput] = useState({
     characterName: '',
-    maxHP: 0,
-    currentHP: 0,
-    initiative: 0
+    maxHP: '',
+    currentHP: '',
+    tempHP: '',
+    initiative: ''
   });
   const [isSubmittingCharacter, setIsSubmittingCharacter] = useState(false);
 
@@ -143,14 +144,20 @@ export default function HomePage() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(characterInput),
+        body: JSON.stringify({
+          characterName: characterInput.characterName,
+          maxHP: parseInt(characterInput.maxHP) || 0,
+          currentHP: parseInt(characterInput.currentHP) || 0,
+          tempHP: parseInt(characterInput.tempHP) || 0,
+          initiative: parseInt(characterInput.initiative) || 0
+        }),
       });
 
       if (characterResponse.ok) {
         await fetchInstances(token);
         setSuccessMessage('Character created and invitation accepted! You can now join the instance.');
         setIsCharacterModalOpen(false);
-        setCharacterInput({ characterName: '', maxHP: 0, currentHP: 0, initiative: 0 });
+        setCharacterInput({ characterName: '', maxHP: '', currentHP: '', tempHP: '', initiative: '' });
       } else {
         throw new Error('Failed to create character');
       }
@@ -164,7 +171,7 @@ export default function HomePage() {
   function closeCharacterModal() {
     setIsCharacterModalOpen(false);
     setSelectedInstanceId(null);
-    setCharacterInput({ characterName: '', maxHP: 0, currentHP: 0, initiative: 0 });
+    setCharacterInput({ characterName: '', maxHP: '', currentHP: '', tempHP: '', initiative: '' });
   }
 
   async function declineInvitation(instanceId: number) {
@@ -377,7 +384,7 @@ export default function HomePage() {
                     <input
                       type="number"
                       value={characterInput.maxHP}
-                      onChange={(e) => setCharacterInput({...characterInput, maxHP: parseInt(e.target.value) || 0})}
+                      onChange={(e) => setCharacterInput({...characterInput, maxHP: e.target.value})}
                       className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Enter max HP"
                     />
@@ -388,9 +395,20 @@ export default function HomePage() {
                     <input
                       type="number"
                       value={characterInput.currentHP}
-                      onChange={(e) => setCharacterInput({...characterInput, currentHP: parseInt(e.target.value) || 0})}
+                      onChange={(e) => setCharacterInput({...characterInput, currentHP: e.target.value})}
                       className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Enter current HP"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Temp HP</label>
+                    <input
+                      type="number"
+                      value={characterInput.tempHP}
+                      onChange={(e) => setCharacterInput({...characterInput, tempHP: e.target.value})}
+                      className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Enter temp HP (optional)"
                     />
                   </div>
                   
@@ -399,7 +417,7 @@ export default function HomePage() {
                     <input
                       type="number"
                       value={characterInput.initiative}
-                      onChange={(e) => setCharacterInput({...characterInput, initiative: parseInt(e.target.value) || 0})}
+                      onChange={(e) => setCharacterInput({...characterInput, initiative: e.target.value})}
                       className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Enter initiative"
                     />
