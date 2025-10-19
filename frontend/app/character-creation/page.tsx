@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { API_URL } from '../../lib/api';
 
 // D&D 5e Races
 const RACES = [
@@ -88,7 +89,7 @@ export default function CharacterCreationPage() {
     setIsCreating(true);
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/characters`, {
+      const response = await fetch(`${API_URL}/characters`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

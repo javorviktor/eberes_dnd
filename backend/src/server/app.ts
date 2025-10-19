@@ -6,6 +6,9 @@ import instancesRouter from '../routes/instances.js';
 
 export const app = express();
 
+// Trust proxy for reverse proxy setup
+app.set('trust proxy', true);
+
 // Configure CORS based on environment
 const isProduction = process.env.NODE_ENV === 'production';
 const corsOptions = {
