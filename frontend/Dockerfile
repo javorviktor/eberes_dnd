@@ -9,6 +9,7 @@ COPY next.config.mjs ./
 COPY postcss.config.js ./
 COPY tailwind.config.ts ./
 COPY app ./app
+COPY lib ./lib
 COPY public ./public
 
 RUN pnpm install && pnpm build

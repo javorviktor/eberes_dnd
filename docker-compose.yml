@@ -8,22 +8,28 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: dnd
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dnd"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   backend:
     build: ./backend
     container_name: dnd_backend
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/dnd?schema=public
       JWT_SECRET: ${JWT_SECRET:-dev_secret}
       PORT: 4000
-      NODE_ENV: production
+      NODE_ENV: development
     ports:
       - "4000:4000"
     networks:
@@ -43,7 +49,7 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://192.168.0.34:4000}
     ports:
       - "3000:3000"
     networks:
